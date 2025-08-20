@@ -12,8 +12,16 @@ namespace GrpcDiscountCode.Services
         {
             var ct = context.CancellationToken;
             byte? length = request.Length == 0 ? null : (byte)request.Length;
-            var codes = await _svc.GenerateAsync(request.Count, length, ct);
-            var response = new GenerateResponse { };
+            var result = await _svc.GenerateAsync(request.Count, length, ct);
+            var response = new GenerateResponse { Result = result };
+            return response;
+        }
+
+        public override async Task<UseCodeResponse> UseCode(UseCodeRequest request, ServerCallContext context)
+        {
+            var ct = context.CancellationToken;
+            var result = await _svc.UseCodeAsync(request.Code, ct);
+            var response = new UseCodeResponse { Result = result };
             return response;
         }
     }

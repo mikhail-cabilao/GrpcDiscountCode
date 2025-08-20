@@ -3,6 +3,7 @@ namespace GrpcDiscountCode.Services
 {
     public interface IDiscountCodeService
     {
-        Task<IList<string>> GenerateAsync(uint requestedCount, byte? fixedLength = null, CancellationToken ct = default);
+        Task<bool> GenerateAsync(uint requestedCount, byte? fixedLength = null, CancellationToken ct = default);
+        Task<byte> UseCodeAsync(string code, CancellationToken ct = default);
     }
 }

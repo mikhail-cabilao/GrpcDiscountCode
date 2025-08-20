@@ -1,5 +1,6 @@
 ﻿using GrpcDiscountCode.Data.Models;
 using GrpcDiscountCode.Data.Repositories;
+using GrpcDiscountCode.Services.Enums;
 using GrpcDiscountCode.Services.Helpers;
 
 namespace GrpcDiscountCode.Services
@@ -17,62 +18,88 @@ namespace GrpcDiscountCode.Services
             _repository = repository;
         }
 
-        public async Task<IList<string>> GenerateAsync(uint requestedCount, byte? fixedLength = null, CancellationToken ct = default)
+        public async Task<bool> GenerateAsync(uint requestedCount, byte? fixedLength = null, CancellationToken ct = default)
         {
             if (requestedCount <= 0) throw new ArgumentOutOfRangeException(nameof(requestedCount));
             if (requestedCount > MaxPerRequest) throw new ArgumentOutOfRangeException(nameof(requestedCount), $"Maximum per request is {MaxPerRequest}.");
-            if (fixedLength is { } L && (L < 7 || L > 8)) throw new ArgumentOutOfRangeException(nameof(fixedLength));
+            if (fixedLength < 7 || fixedLength > 8) throw new ArgumentOutOfRangeException(nameof(fixedLength));
 
             var created = new List<string>();
-            var rnd = new Random();
             int remaining = (int)requestedCount;
             int attempt = 0;
 
-            while (remaining > 0)
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                attempt++;
-
-                int candidateCount = (int)Math.Ceiling(remaining * 1.2);
-                var candidates = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var code in DiscountCodeGeneratorHelper.GenerateBatch(candidateCount, fixedLength))
+                while (remaining > 0)
                 {
-                    candidates.Add(code);
-                    if (candidates.Count >= candidateCount) break;
-                }
+                    ct.ThrowIfCancellationRequested();
+                    attempt++;
 
-                var existing = await _repository.
-                    GetDiscountCodesAsync(x => candidates.Contains(x.Code), x => x.Code);
-
-                candidates.ExceptWith(existing);
-
-                var toInsertNow = candidates.Take(Math.Min(remaining, candidates.Count)).ToList();
-
-                int idx = 0;
-                while (idx < toInsertNow.Count)
-                {
-                    var chunk = toInsertNow.Skip(idx).Take(MaxChunkInsert)
-                        .Select(c => new DiscountCode { Code = c, CreatedDate = DateTime.UtcNow })
-                        .ToList();
-
-                    if (chunk.Count == 0) break;
-
-                    var (success, duplicates) = await _repository.AddRangeTransactAsync(chunk);
-
-                    if(!success)
+                    int candidateCount = (int)Math.Ceiling(remaining * 1.2);
+                    var candidates = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var code in DiscountCodeGeneratorHelper.GenerateBatch(candidateCount, fixedLength))
                     {
-                        toInsertNow = toInsertNow.Except(duplicates).ToList();
+                        candidates.Add(code);
+                        if (candidates.Count >= candidateCount) break;
                     }
 
-                    idx += MaxChunkInsert; 
-                    remaining -= chunk.Count;
+                    var existing = await _repository.
+                        GetDiscountCodesAsync(x => candidates.Contains(x.Code), x => x.Code);
+
+                    candidates.ExceptWith(existing);
+
+                    var toInsertNow = candidates.Take(Math.Min(remaining, candidates.Count)).ToList();
+
+                    int idx = 0;
+                    while (idx < toInsertNow.Count)
+                    {
+                        var chunk = toInsertNow.Skip(idx).Take(MaxChunkInsert)
+                            .Select(c => new DiscountCode { Code = c, CreatedDate = DateTime.UtcNow })
+                            .ToList();
+
+                        if (chunk.Count == 0) break;
+
+                        var (success, duplicates) = await _repository.AddRangeTransactAsync(chunk);
+
+                        if (!success)
+                        {
+                            toInsertNow = toInsertNow.Except(duplicates).ToList();
+                        }
+
+                        idx += MaxChunkInsert;
+                        remaining -= chunk.Count;
+                        created.AddRange(chunk.Select(c => c.Code));
+                    }
+
+                    if (attempt > MaxRetries && remaining > 0)
+                        throw new InvalidOperationException($"Could not generate the requested number of unique codes after {MaxRetries} retries. Created {created.Count}.");
                 }
 
-                if (attempt > MaxRetries && remaining > 0)
-                    throw new InvalidOperationException($"Could not generate the requested number of unique codes after {MaxRetries} retries. Created {created.Count}.");
+                return true;
             }
+            catch(InvalidOperationException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
 
-            return created;
+        public async Task<byte> UseCodeAsync(string code, CancellationToken ct = default)
+        {
+            if (code.Length < 7 || code.Length > 8) throw new ArgumentOutOfRangeException(nameof(code.Length));
+
+            code = code.Trim();
+
+            var codeResult = await _repository.GetDiscountCodesAsync(x => x.Code == code, x => x, ct);
+
+            if (codeResult is null) return (byte)UseCodeStatus.Invalid;
+
+            await _repository.DeleteCodeAsync(codeResult.First());
+
+            return (byte)UseCodeStatus.Success;
         }
     }
 }

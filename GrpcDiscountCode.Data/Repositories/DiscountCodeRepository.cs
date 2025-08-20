@@ -52,6 +52,18 @@ namespace GrpcDiscountCode.Data.Repositories
             }
         }
 
+        public async Task<int> DeleteCodeAsync(DiscountCode discount, CancellationToken ct = default)
+        {
+            try
+            {
+                return await _discountContext.DiscountCodes.Where(x => x.Code == discount.Code).ExecuteDeleteAsync(ct);
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+        }
+
         // for sql server
         public async Task BulkMergeAsync(List<DiscountCode> discountCodes)
         {
